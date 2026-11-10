@@ -16,12 +16,20 @@ class ResponseError(AiounifiException):
     """Invalid response."""
 
 
+class EndpointNotFound(ResponseError):
+    """Requested API endpoint does not exist."""
+
+
 class Unauthorized(AiounifiException):
     """Username is not authorized."""
 
 
 class LoginRequired(AiounifiException):
     """User is logged out."""
+
+
+class Forbidden(AiounifiException):
+    """Forbidden request."""
 
 
 class NoPermission(AiounifiException):
@@ -39,20 +47,39 @@ class BadGateway(RequestError):
     """Invalid response from the upstream server."""
 
 
+class ApplicationNotReady(ServiceUnavailable):
+    """The application answered, but not with API data.
+
+    A starting Network application answers every path with an HTML page.
+    """
+
+
+# Raised when login attempt limit is reached (HTTP 429 AUTHENTICATION_FAILED_LIMIT_REACHED)
+class AuthenticationRateLimitError(AiounifiException):
+    """Raised when login attempt limit is reached (HTTP 429)."""
+
+
 class TwoFaTokenRequired(AiounifiException):
     """2 factor authentication token required."""
 
 
-ERRORS = {
-    "api.err.LoginRequired": LoginRequired,
-    "api.err.Invalid": Unauthorized,
-    "api.err.NoPermission": NoPermission,
-    "api.err.Ubic2faTokenRequired": TwoFaTokenRequired,
-}
+class NetworkApiError(AiounifiException):
+    """Failed request to the Network API v1.
+
+    The attributes hold the fields of the API's error envelope when the
+    response carried one, so callers need not parse the message.
+    """
+
+    status_code: int = 0
+    status_name: str = ""
+    code: str = ""
+    detail: str = ""
+    timestamp: str = ""
+    request_path: str = ""
+    request_id: str = ""
+    retry_after: int | None = None
+    """Seconds the console asked the caller to wait, from `Retry-After`."""
 
 
-def raise_error(error) -> None:
-    """Raise error."""
-    type = error
-    cls = ERRORS.get(type, AiounifiException)
-    raise cls("{}".format(type))
+class WebsocketError(AiounifiException):
+    """Websocket error."""

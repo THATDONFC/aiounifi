@@ -3,451 +3,1903 @@
 pytest --cov-report term-missing --cov=aiounifi.devices tests/test_devices.py
 """
 
-from aiounifi.devices import Devices
+from collections.abc import Callable
+from copy import deepcopy
+from typing import Any
+from unittest.mock import Mock
 
-from .fixtures import ACCESS_POINT_AC_PRO, GATEWAY_USG3, SWITCH_16_PORT_POE
-from .test_controller import verify_call
+from aioresponses import aioresponses
+import pytest
+
+from aiounifi.controller import Controller
+from aiounifi.models.device import (
+    Device,
+    DeviceLocateRequest,
+    DevicePowerCyclePortRequest,
+    DeviceRestartRequest,
+    DeviceSetLedStatus,
+    DeviceSetOutletCycleEnabledRequest,
+    DeviceSetOutletRelayRequest,
+    DeviceSetPoePortModeRequest,
+    DeviceSetPortEnabledRequest,
+    DeviceState,
+    DeviceType,
+    DeviceUpgradeRequest,
+    WifiBand,
+)
+from aiounifi.models.message import MessageKey
+
+from .fixtures import (
+    ACCESS_POINT_AC_PRO,
+    GATEWAY_IPS_ENGINE_PENDING,
+    GATEWAY_IPS_ENGINE_SWAPPED,
+    GATEWAY_USG3,
+    PDU_PRO,
+    PLUG_UP1,
+    STRIP_UP6,
+    SWITCH_16_PORT_POE,
+    UDM_PRO_MAX_UPTIME_STATS,
+    UDW_PSU_TABLE,
+    UPS_2U,
+    UPS_2U_PRO,
+)
+
+test_data = [
+    (
+        [{"mac": "0", "disabled": True}],
+        {
+            "mac": "0",
+            "disabled": True,
+            "led_override_color_brightness": None,
+        },
+    ),
+    (
+        [ACCESS_POINT_AC_PRO],
+        {
+            "board_revision": 21,
+            "considered_lost_at": 1588175837,
+            "disabled": False,
+            "id": "235678987654345678",
+            "ip": "192.168.0.4",
+            "downlink_table": [],
+            "fan_level": None,
+            "has_fan": False,
+            "last_seen": 1588175726,
+            "led_override": "on",
+            "lldp_table": [],
+            "mac": "80:2a:a8:00:01:02",
+            "model": "U7PG2",
+            "name": "ACCESS POINT AC PRO",
+            "next_heartbeat_at": 1588175763,
+            "overheating": False,
+            "port_overrides": [],
+            "port_table": ACCESS_POINT_AC_PRO["port_table"],
+            "radio_table": ACCESS_POINT_AC_PRO["radio_table"],
+            "speedtest_status": None,
+            "state": 1,
+            "sys_stats": {
+                "loadavg_1": "0.15",
+                "loadavg_15": "0.02",
+                "loadavg_5": "0.08",
+                "mem_buffer": 0,
+                "mem_total": 128622592,
+                "mem_used": 63606784,
+            },
+            "type": "uap",
+            "version": "4.0.69.10871",
+            "upgradable": True,
+            "upgrade_to_firmware": "4.0.80.10875",
+            "uplink": ACCESS_POINT_AC_PRO["uplink"],
+            "uplink_depth": None,
+            "user_num_sta": 12,
+            "wlan_overrides": [
+                {
+                    "name": "My5GHzSSID1",
+                    "radio": "na",
+                    "radio_name": "wifi1",
+                    "wlan_id": "012345678910111213141516",
+                },
+            ],
+        },
+    ),
+    (
+        [GATEWAY_USG3],
+        {
+            "board_revision": 16,
+            "considered_lost_at": 1588175842,
+            "disabled": False,
+            "general_temperature": None,
+            "has_temperature": False,
+            "id": "235678987654345678",
+            "ip": "1.2.3.4",
+            "downlink_table": [],
+            "fan_level": None,
+            "has_fan": False,
+            "last_seen": 1588175740,
+            "lldp_table": [],
+            "mac": "78:8a:20:33:44:55",
+            "model": "UGW3",
+            "name": "USG",
+            "next_heartbeat_at": 1588175774,
+            "overheating": False,
+            "port_overrides": [],
+            "port_table": GATEWAY_USG3["port_table"],
+            "state": 1,
+            "sys_stats": {
+                "loadavg_1": "0.03",
+                "loadavg_15": "0.08",
+                "loadavg_5": "0.07",
+                "mem_buffer": 57561088,
+                "mem_total": 507412480,
+                "mem_used": 293453824,
+            },
+            "system_stats": ("0", "25", "3971505"),
+            "type": "ugw",
+            "version": "4.4.44.5213844",
+            "upgradable": True,
+            "upgrade_to_firmware": "4.4.50.5272448",
+            "uplink": GATEWAY_USG3["uplink"],
+            "uplink_depth": None,
+            "uptime": 3971869,
+            "uptime_stats": {
+                "WAN": {
+                    "monitors": [
+                        {
+                            "availability": 100.0,
+                            "latency_average": 5,
+                            "target": "www.microsoft.com",
+                            "type": "icmp",
+                        },
+                        {
+                            "availability": 100.0,
+                            "latency_average": 7,
+                            "target": "google.com",
+                            "type": "icmp",
+                        },
+                        {
+                            "availability": 100.0,
+                            "latency_average": 5,
+                            "target": "1.1.1.1",
+                            "type": "icmp",
+                        },
+                    ]
+                },
+                "WAN2": {
+                    "monitors": [
+                        {
+                            "availability": 0.0,
+                            "target": "www.microsoft.com",
+                            "type": "icmp",
+                        },
+                        {"availability": 0.0, "target": "google.com", "type": "icmp"},
+                        {"availability": 0.0, "target": "1.1.1.1", "type": "icmp"},
+                    ]
+                },
+                "WAN3": {
+                    "monitors": [
+                        {
+                            "availability": 100.0,
+                            "latency_average": 41,
+                            "target": "www.microsoft.com",
+                            "type": "icmp",
+                        },
+                        {
+                            "availability": 100.0,
+                            "latency_average": 32,
+                            "target": "google.com",
+                            "type": "icmp",
+                        },
+                        {
+                            "availability": 100.0,
+                            "latency_average": 16,
+                            "target": "1.1.1.1",
+                            "type": "icmp",
+                        },
+                    ]
+                },
+            },
+            "user_num_sta": 20,
+            "wlan_overrides": [],
+            "speedtest_status": GATEWAY_USG3["speedtest-status"],
+        },
+    ),
+    (
+        [PLUG_UP1],
+        {
+            "board_revision": 2,
+            "downlink_table": [],
+            "id": "600c8356942a6ade50707b56",
+            "ip": "192.168.0.189",
+            "has_fan": False,
+            "has_temperature": False,
+            "general_temperature": None,
+            "last_seen": 1642055273,
+            "led_override": "on",
+            "led_override_color": "#0000ff",
+            "led_override_color_brightness": 100,
+            "lldp_table": [],
+            "mac": "fc:ec:da:76:4f:5f",
+            "model": "UP1",
+            "name": "Plug",
+            "next_interval": 40,
+            "outlet_table": [
+                {
+                    "index": 1,
+                    "has_relay": True,
+                    "has_metering": False,
+                    "relay_state": False,
+                    "name": "Outlet 1",
+                }
+            ],
+            "outlet_overrides": [],
+            "port_table": [],
+            "state": 1,
+            "sys_stats": {"mem_total": 98304, "mem_used": 87736},
+            "system_stats": ("", "", ""),
+            "type": "uap",
+            "version": "2.2.1.511",
+            "upgradable": False,
+            "uplink": PLUG_UP1["uplink"],
+            "uptime": 376083,
+        },
+    ),
+    (
+        [STRIP_UP6],
+        {
+            "board_revision": 5,
+            "downlink_table": [],
+            "general_temperature": None,
+            "has_temperature": False,
+            "id": "61eb1a75942a6a859b45d2bc",
+            "ip": "192.168.0.138",
+            "has_fan": False,
+            "last_seen": 1642800247,
+            "lldp_table": [],
+            "mac": "78:45:58:fc:16:7d",
+            "model": "UP6",
+            "name": "",
+            "next_interval": 41,
+            "outlet_table": [
+                {
+                    "index": 1,
+                    "has_relay": True,
+                    "has_metering": False,
+                    "relay_state": False,
+                    "cycle_enabled": False,
+                    "name": "Outlet 1",
+                },
+                {
+                    "index": 2,
+                    "has_relay": True,
+                    "has_metering": False,
+                    "relay_state": False,
+                    "cycle_enabled": False,
+                    "name": "Outlet 2",
+                },
+                {
+                    "index": 3,
+                    "has_relay": True,
+                    "has_metering": False,
+                    "relay_state": True,
+                    "cycle_enabled": False,
+                    "name": "Outlet 3",
+                },
+                {
+                    "index": 4,
+                    "has_relay": True,
+                    "has_metering": False,
+                    "relay_state": True,
+                    "cycle_enabled": True,
+                    "name": "Outlet 4",
+                },
+                {
+                    "index": 5,
+                    "has_relay": True,
+                    "has_metering": False,
+                    "relay_state": False,
+                    "cycle_enabled": False,
+                    "name": "Outlet 5",
+                },
+                {
+                    "index": 6,
+                    "has_relay": True,
+                    "has_metering": False,
+                    "relay_state": False,
+                    "cycle_enabled": False,
+                    "name": "Outlet 6",
+                },
+                {
+                    "index": 7,
+                    "has_relay": True,
+                    "has_metering": False,
+                    "relay_state": False,
+                    "cycle_enabled": False,
+                    "name": "USB Outlets",
+                },
+            ],
+            "outlet_overrides": [
+                {
+                    "index": 1,
+                    "name": "Outlet 1",
+                    "cycle_enabled": False,
+                    "relay_state": False,
+                },
+                {
+                    "index": 2,
+                    "name": "Outlet 2",
+                    "cycle_enabled": False,
+                    "relay_state": False,
+                },
+                {
+                    "index": 3,
+                    "name": "Outlet 3",
+                    "cycle_enabled": False,
+                    "relay_state": True,
+                },
+                {
+                    "index": 4,
+                    "name": "Outlet 4",
+                    "cycle_enabled": True,
+                    "relay_state": True,
+                },
+                {
+                    "index": 5,
+                    "name": "Outlet 5",
+                    "cycle_enabled": False,
+                    "relay_state": False,
+                },
+                {
+                    "index": 6,
+                    "name": "Outlet 6",
+                    "cycle_enabled": False,
+                    "relay_state": False,
+                },
+                {
+                    "index": 7,
+                    "name": "USB Outlets",
+                    "cycle_enabled": False,
+                    "relay_state": False,
+                },
+            ],
+            "port_table": [],
+            "state": 1,
+            "sys_stats": {"mem_total": 98304, "mem_used": 88056},
+            "system_stats": ("", "", ""),
+            "type": "uap",
+            "version": "2.2.1.511",
+            "upgradable": False,
+            "uplink": STRIP_UP6["uplink"],
+            "uptime": 2370,
+        },
+    ),
+    (
+        [PDU_PRO],
+        {
+            "board_revision": 1,
+            "downlink_table": [],
+            "general_temperature": None,
+            "has_temperature": False,
+            "id": "61e4a1e60bbb2d53aeb430ea",
+            "ip": "192.168.1.66",
+            "has_fan": False,
+            "last_seen": 1643721168,
+            "lldp_table": [
+                {
+                    "chassis_id": "00:00:00:00:00:83",
+                    "chassis_id_subtype": "mac",
+                    "is_wired": True,
+                    "local_port_idx": 1,
+                    "local_port_name": "eth0",
+                    "port_id": "local Port 1",
+                }
+            ],
+            "mac": "00:00:00:00:00:84",
+            "model": "USPPDUP",
+            "name": "Main Server Cabinet PDU",
+            "next_interval": 56,
+            "outlet_ac_power_budget": "1875.000",
+            "outlet_ac_power_consumption": "307.741",
+            "outlet_table": [
+                {
+                    "index": 1,
+                    "relay_state": True,
+                    "cycle_enabled": False,
+                    "name": "USB Outlet 1",
+                    "outlet_caps": 1,
+                },
+                {
+                    "index": 2,
+                    "relay_state": False,
+                    "cycle_enabled": False,
+                    "name": "USB Outlet 2",
+                    "outlet_caps": 1,
+                },
+                {
+                    "index": 3,
+                    "relay_state": True,
+                    "cycle_enabled": False,
+                    "name": "USB Outlet 3",
+                    "outlet_caps": 1,
+                },
+                {
+                    "index": 4,
+                    "relay_state": False,
+                    "cycle_enabled": False,
+                    "name": "USB Outlet 4",
+                    "outlet_caps": 1,
+                },
+                {
+                    "index": 5,
+                    "relay_state": True,
+                    "name": "Console",
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.061",
+                    "outlet_power": "3.815",
+                    "outlet_power_factor": "0.527",
+                },
+                {
+                    "index": 6,
+                    "relay_state": True,
+                    "name": "UDM Pro",
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.248",
+                    "outlet_power": "14.351",
+                    "outlet_power_factor": "0.488",
+                },
+                {
+                    "index": 7,
+                    "relay_state": True,
+                    "name": "Unraid",
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "1.454",
+                    "outlet_power": "169.900",
+                    "outlet_power_factor": "0.985",
+                },
+                {
+                    "index": 8,
+                    "relay_state": True,
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.000",
+                    "outlet_power": "0.000",
+                    "outlet_power_factor": "0.000",
+                    "name": "Outlet 8",
+                },
+                {
+                    "index": 9,
+                    "relay_state": True,
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.000",
+                    "outlet_power": "0.000",
+                    "outlet_power_factor": "0.000",
+                    "name": "Outlet 9",
+                },
+                {
+                    "index": 10,
+                    "relay_state": True,
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.000",
+                    "outlet_power": "0.000",
+                    "outlet_power_factor": "0.000",
+                    "name": "Outlet 10",
+                },
+                {
+                    "index": 11,
+                    "relay_state": False,
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.000",
+                    "outlet_power": "0.000",
+                    "outlet_power_factor": "0.000",
+                    "name": "Outlet 11",
+                },
+                {
+                    "index": 12,
+                    "relay_state": True,
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.000",
+                    "outlet_power": "0.000",
+                    "outlet_power_factor": "0.000",
+                    "name": "Outlet 12",
+                },
+                {
+                    "index": 13,
+                    "relay_state": True,
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.000",
+                    "outlet_power": "0.000",
+                    "outlet_power_factor": "0.000",
+                    "name": "Outlet 13",
+                },
+                {
+                    "index": 14,
+                    "relay_state": True,
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.000",
+                    "outlet_power": "0.000",
+                    "outlet_power_factor": "0.000",
+                    "name": "Outlet 14",
+                },
+                {
+                    "index": 15,
+                    "relay_state": True,
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.127",
+                    "outlet_power": "9.394",
+                    "outlet_power_factor": "0.623",
+                    "name": "Outlet 15",
+                },
+                {
+                    "index": 16,
+                    "relay_state": True,
+                    "name": "UNVR Pro",
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.278",
+                    "outlet_power": "31.992",
+                    "outlet_power_factor": "0.970",
+                },
+                {
+                    "index": 17,
+                    "relay_state": True,
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.000",
+                    "outlet_power": "0.000",
+                    "outlet_power_factor": "0.000",
+                    "name": "Outlet 17",
+                },
+                {
+                    "index": 18,
+                    "relay_state": True,
+                    "name": "Home Assistant",
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.328",
+                    "outlet_power": "21.529",
+                    "outlet_power_factor": "0.553",
+                },
+                {
+                    "index": 19,
+                    "relay_state": True,
+                    "name": "Server Cabinet Switch",
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.495",
+                    "outlet_power": "56.760",
+                    "outlet_power_factor": "0.967",
+                },
+                {
+                    "index": 20,
+                    "relay_state": True,
+                    "name": "Rear Cabinet Lights",
+                    "outlet_caps": 3,
+                    "outlet_voltage": "118.566",
+                    "outlet_current": "0.000",
+                    "outlet_power": "0.000",
+                    "outlet_power_factor": "0.000",
+                },
+            ],
+            "outlet_overrides": [
+                {
+                    "index": 1,
+                    "name": "USB Outlet 1",
+                    "cycle_enabled": False,
+                    "relay_state": False,
+                },
+                {
+                    "index": 2,
+                    "name": "USB Outlet 2",
+                    "cycle_enabled": False,
+                    "relay_state": False,
+                },
+                {
+                    "index": 3,
+                    "name": "USB Outlet 3",
+                    "cycle_enabled": False,
+                    "relay_state": False,
+                },
+                {
+                    "index": 4,
+                    "name": "USB Outlet 4",
+                    "cycle_enabled": False,
+                    "relay_state": False,
+                },
+                {"index": 5, "name": "Console", "relay_state": True},
+                {"index": 6, "name": "UDM Pro", "relay_state": True},
+                {"index": 7, "name": "Unraid", "relay_state": True},
+                {"index": 8, "relay_state": True},
+                {"index": 9, "relay_state": True},
+                {"index": 10, "relay_state": True},
+                {"index": 11, "relay_state": True},
+                {"index": 12, "relay_state": True},
+                {"index": 13, "relay_state": True},
+                {"index": 14, "relay_state": True},
+                {"index": 15, "relay_state": True},
+                {"index": 16, "name": "UNVR Pro", "relay_state": True},
+                {"index": 17, "relay_state": True},
+                {"index": 18, "name": "Home Assistant", "relay_state": True},
+                {"index": 19, "name": "Server Cabinet Switch", "relay_state": True},
+                {"index": 20, "name": "Rear Cabinet Lights", "relay_state": True},
+            ],
+            "port_table": [
+                {
+                    "port_idx": 1,
+                    "media": "FE",
+                    "port_poe": False,
+                    "poe_caps": 0,
+                    "speed_caps": 1048591,
+                    "op_mode": "switch",
+                    "portconf_id": "5fc7fb23c3da2e039ebeea97",
+                    "autoneg": False,
+                    "enable": True,
+                    "flowctrl_rx": False,
+                    "flowctrl_tx": False,
+                    "full_duplex": True,
+                    "is_uplink": True,
+                    "jumbo": False,
+                    "mac_table": [],
+                    "rx_broadcast": 0,
+                    "rx_bytes": 538000102,
+                    "rx_dropped": 2,
+                    "rx_errors": 0,
+                    "rx_multicast": 0,
+                    "rx_packets": 3943979,
+                    "satisfaction": 90,
+                    "satisfaction_reason": 1,
+                    "speed": 100,
+                    "stp_pathcost": 0,
+                    "stp_state": "disabled",
+                    "tx_broadcast": 0,
+                    "tx_bytes": 114523726,
+                    "tx_dropped": 0,
+                    "tx_errors": 0,
+                    "tx_multicast": 0,
+                    "tx_packets": 670312,
+                    "up": True,
+                    "tx_bytes-r": 82,
+                    "rx_bytes-r": 1510,
+                    "bytes-r": 1592,
+                    "name": "Port 1",
+                    "masked": False,
+                    "aggregated_by": False,
+                }
+            ],
+            "state": 1,
+            "sys_stats": {
+                "loadavg_1": "0.08",
+                "loadavg_15": "0.01",
+                "loadavg_5": "0.02",
+                "mem_buffer": 0,
+                "mem_total": 61792256,
+                "mem_used": 18235392,
+            },
+            "system_stats": ("1.1", "29.5", "1347471"),
+            "type": "usw",
+            "version": "5.76.7.13442",
+            "upgradable": False,
+            "uplink": PDU_PRO["uplink"],
+            "uptime": 1347471,
+        },
+    ),
+    (
+        [SWITCH_16_PORT_POE],
+        {
+            "board_revision": 9,
+            "considered_lost_at": 1588175821,
+            "disabled": False,
+            "general_temperature": 56,
+            "has_temperature": True,
+            "id": "235678987654345678",
+            "ip": "192.168.0.57",
+            "downlink_table": [],
+            "fan_level": 0,
+            "has_fan": True,
+            "last_seen": 1588175722,
+            "lldp_table": [],
+            "mac": "fc:ec:da:11:22:33",
+            "model": "US16P150",
+            "name": "Switch 16",
+            "next_interval": 23,
+            "next_heartbeat_at": 1588175755,
+            "overheating": False,
+            "port_overrides": [
+                {
+                    "poe_mode": "auto",
+                    "portconf_id": "5e1b309714bd614afd3d11a7",
+                    "port_security_mac_address": [],
+                    "autoneg": True,
+                    "stp_port_mode": True,
+                },
+                {
+                    "poe_mode": "off",
+                    "port_idx": 3,
+                    "portconf_id": "5a32aa4ee4babd4452422ddd22222",
+                },
+                {
+                    "poe_mode": "auto",
+                    "port_idx": 4,
+                    "portconf_id": "5a32aa4ee4babd4452422ddd22222",
+                },
+                {
+                    "poe_mode": "auto",
+                    "port_idx": 16,
+                    "portconf_id": "5a32aa4ee4babd4452422ddd22222",
+                },
+            ],
+            "port_table": SWITCH_16_PORT_POE["port_table"],
+            "state": 1,
+            "sys_stats": {
+                "loadavg_1": "2.82",
+                "loadavg_15": "2.81",
+                "loadavg_5": "2.80",
+                "mem_buffer": 0,
+                "mem_total": 262402048,
+                "mem_used": 129331200,
+            },
+            "system_stats": ("100.0", "49.3", "3971865"),
+            "type": "usw",
+            "version": "4.0.66.10832",
+            "upgradable": True,
+            "upgrade_to_firmware": "4.0.80.10875",
+            "uplink": SWITCH_16_PORT_POE["uplink"],
+            "uplink_depth": 2,
+            "uptime": 3971865,
+            "user_num_sta": 4,
+            "wlan_overrides": [],
+        },
+    ),
+    # UniFi API has been observed to return string values for led_override_color_brightness.
+    (
+        [
+            {
+                "mac": "00:11:22:33:44:55",
+                "model": "UP1",
+                "type": "uap",
+                "version": "1.0.0",
+                "led_override": "on",
+                "led_override_color": "#ff0000",
+                "led_override_color_brightness": "75",
+            }
+        ],
+        {
+            "mac": "00:11:22:33:44:55",
+            "model": "UP1",
+            "led_override": "on",
+            "led_override_color": "#ff0000",
+            "led_override_color_brightness": 75,
+        },
+    ),
+]
 
 
-async def test_no_devices(mock_aioresponse, unifi_controller):
-    """Test that no devices also work."""
-    devices = Devices([], unifi_controller.request)
-
-    mock_aioresponse.get("https://host:8443/api/s/default/stat/device", payload={})
-
+@pytest.mark.parametrize(("device_payload", "reference_data"), test_data)
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_device(
+    unifi_controller: Controller, reference_data: dict[str, Any]
+) -> None:
+    """Test device class."""
+    devices = unifi_controller.devices
     await devices.update()
+    assert len(devices.items()) == 1
 
-    assert verify_call(
-        mock_aioresponse, "get", "https://host:8443/api/s/default/stat/device"
+    device = next(iter(devices.values()))
+    for key, value in reference_data.items():
+        assert getattr(device, key) == value
+    assert repr(device) == f"<Device {device.name}: {device.mac}>"
+
+
+@pytest.mark.parametrize(
+    ("method", "mac", "command"),
+    [("upgrade", "0", {"mac": "0", "cmd": "upgrade"})],
+)
+async def test_device_commands(
+    mock_aioresponse: aioresponses,
+    unifi_controller: Controller,
+    unifi_called_with: Callable[[str, str, dict[str, Any]], bool],
+    method: str,
+    mac: str,
+    command: dict[str, Any],
+) -> None:
+    """Test device commands."""
+    mock_aioresponse.post("https://host:8443/api/s/default/cmd/devmgr", payload={})
+    class_command = getattr(unifi_controller.devices, method)
+    await class_command(mac)
+    assert unifi_called_with("post", "/api/s/default/cmd/devmgr", json=command)
+
+
+@pytest.mark.parametrize(
+    ("api_request", "data", "command"),
+    [
+        (
+            DeviceRestartRequest,
+            {"mac": "0", "soft": True},
+            {"mac": "0", "cmd": "restart", "reboot_type": "soft"},
+        ),
+        (
+            DeviceRestartRequest,
+            {"mac": "0", "soft": False},
+            {"mac": "0", "cmd": "restart", "reboot_type": "hard"},
+        ),
+        (
+            DeviceUpgradeRequest,
+            {"mac": "0"},
+            {"mac": "0", "cmd": "upgrade"},
+        ),
+        (
+            DevicePowerCyclePortRequest,
+            {"mac": "0", "port_idx": 1},
+            {"mac": "0", "port_idx": 1, "cmd": "power-cycle"},
+        ),
+        (
+            DeviceLocateRequest,
+            {"mac": "0", "locate": True},
+            {"mac": "0", "cmd": "set-locate"},
+        ),
+        (
+            DeviceLocateRequest,
+            {"mac": "0", "locate": False},
+            {"mac": "0", "cmd": "unset-locate"},
+        ),
+    ],
+)
+async def test_device_requests(
+    mock_aioresponse: aioresponses,
+    unifi_controller: Controller,
+    unifi_called_with: Callable[[str, str, dict[str, Any]], bool],
+    api_request: DeviceRestartRequest
+    | DeviceUpgradeRequest
+    | DevicePowerCyclePortRequest,
+    data: dict[str, Any],
+    command: dict[str, Any],
+) -> None:
+    """Test device commands."""
+    mock_aioresponse.post("https://host:8443/api/s/default/cmd/devmgr", payload={})
+    await unifi_controller.request(api_request.create(**data))
+    assert unifi_called_with("post", "/api/s/default/cmd/devmgr", json=command)
+
+
+@pytest.mark.parametrize(
+    ("device_payload", "api_request", "data", "command"),
+    [
+        (  # Outlet set relay without existing override
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "outlet_overrides": [],
+                    "outlet_table": [
+                        {
+                            "index": 1,
+                            "relay_state": True,
+                            "cycle_enabled": False,
+                            "name": "USB Outlet 1",
+                            "outlet_caps": 1,
+                        },
+                    ],
+                }
+            ],
+            DeviceSetOutletRelayRequest,
+            {"outlet_idx": 1, "state": True},
+            {
+                "outlet_overrides": [
+                    {"index": 1, "name": "USB Outlet 1", "relay_state": True}
+                ]
+            },
+        ),
+        (  # Outlet set relay with existing override
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "outlet_overrides": [{"index": 2}],
+                    "outlet_table": [
+                        {
+                            "index": 2,
+                            "relay_state": True,
+                            "cycle_enabled": False,
+                            "name": "USB Outlet 1",
+                            "outlet_caps": 1,
+                        },
+                    ],
+                }
+            ],
+            DeviceSetOutletRelayRequest,
+            {"outlet_idx": 2, "state": False},
+            {"outlet_overrides": [{"index": 2, "relay_state": False}]},
+        ),
+        (  # Outlet outlet cycle without existing override
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "outlet_overrides": [],
+                    "outlet_table": [
+                        {
+                            "index": 1,
+                            "relay_state": True,
+                            "cycle_enabled": False,
+                            "name": "USB Outlet 1",
+                            "outlet_caps": 1,
+                        },
+                    ],
+                }
+            ],
+            DeviceSetOutletCycleEnabledRequest,
+            {"outlet_idx": 1, "state": True},
+            {
+                "outlet_overrides": [
+                    {"index": 1, "name": "USB Outlet 1", "cycle_enabled": True}
+                ]
+            },
+        ),
+        (  # Outlet outlet cycle with existing override
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "outlet_overrides": [{"index": 2}],
+                    "outlet_table": [
+                        {
+                            "index": 2,
+                            "relay_state": True,
+                            "cycle_enabled": False,
+                            "name": "USB Outlet 1",
+                            "outlet_caps": 1,
+                        },
+                    ],
+                }
+            ],
+            DeviceSetOutletCycleEnabledRequest,
+            {"outlet_idx": 2, "state": False},
+            {"outlet_overrides": [{"index": 2, "cycle_enabled": False}]},
+        ),
+        (  # PoE port mode without existing override
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "port_overrides": [],
+                    "port_table": [
+                        {
+                            "poe_mode": "Auto",
+                            "name": "Port 1",
+                            "port_idx": 1,
+                        },
+                    ],
+                }
+            ],
+            DeviceSetPoePortModeRequest,
+            {"port_idx": 1, "mode": "off"},
+            {"port_overrides": [{"port_idx": 1, "poe_mode": "off"}]},
+        ),
+        (  # PoE port mode with portconf_id without existing override
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "port_overrides": [],
+                    "port_table": [
+                        {
+                            "poe_mode": "Auto",
+                            "name": "Port 1",
+                            "port_idx": 1,
+                            "portconf_id": "123",
+                        },
+                    ],
+                }
+            ],
+            DeviceSetPoePortModeRequest,
+            {"port_idx": 1, "mode": "off"},
+            {
+                "port_overrides": [
+                    {"port_idx": 1, "poe_mode": "off", "portconf_id": "123"}
+                ]
+            },
+        ),
+        (  # PoE port mode with existing override
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "port_overrides": [{"port_idx": 1, "name": "Office"}],
+                    "port_table": [
+                        {
+                            "poe_mode": "Auto",
+                            "name": "Office",
+                            "port_idx": 1,
+                        },
+                    ],
+                }
+            ],
+            DeviceSetPoePortModeRequest,
+            {"port_idx": 1, "mode": "off"},
+            {"port_overrides": [{"port_idx": 1, "poe_mode": "off", "name": "Office"}]},
+        ),
+        (  # PoE multi target port mode with existing override
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "port_overrides": [{"port_idx": 1, "name": "Office"}],
+                    "port_table": [
+                        {
+                            "poe_mode": "Auto",
+                            "name": "Office",
+                            "port_idx": 1,
+                        },
+                        {
+                            "poe_mode": "Off",
+                            "name": "Hallway",
+                            "port_idx": 2,
+                        },
+                    ],
+                }
+            ],
+            DeviceSetPoePortModeRequest,
+            {"targets": [(1, "off"), (2, "auto")]},
+            {
+                "port_overrides": [
+                    {"port_idx": 1, "poe_mode": "off", "name": "Office"},
+                    {"port_idx": 2, "poe_mode": "auto"},
+                ]
+            },
+        ),
+        (  # Port disable without existing override
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "port_overrides": [],
+                    "port_table": [
+                        {"enable": True, "port_idx": 1},
+                        {"enable": True, "port_idx": 2},
+                    ],
+                }
+            ],
+            DeviceSetPortEnabledRequest,
+            {"port_idx": 1, "enabled": False},
+            {"port_overrides": [{"port_idx": 1, "port_security_enabled": True}]},
+        ),
+        (  # Port disable with port profile without existing override
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "port_overrides": [],
+                    "port_table": [
+                        {"enable": True, "port_idx": 1, "portconf_id": "123"}
+                    ],
+                }
+            ],
+            DeviceSetPortEnabledRequest,
+            {"port_idx": 1, "enabled": False},
+            {
+                "port_overrides": [
+                    {"port_idx": 1, "port_security_enabled": True, "portconf_id": "123"}
+                ]
+            },
+        ),
+        (  # Port disable keeps existing override
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "port_overrides": [
+                        {
+                            "port_idx": 1,
+                            "name": "Office",
+                            "native_networkconf_id": "iot",
+                        }
+                    ],
+                    "port_table": [
+                        {"enable": True, "port_idx": 1},
+                        {"enable": True, "port_idx": 2},
+                    ],
+                }
+            ],
+            DeviceSetPortEnabledRequest,
+            {"port_idx": 1, "enabled": False},
+            {
+                "port_overrides": [
+                    {
+                        "port_idx": 1,
+                        "name": "Office",
+                        "native_networkconf_id": "iot",
+                        "port_security_enabled": True,
+                    }
+                ]
+            },
+        ),
+        (  # Port enable gives a blocked port the default network back
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "port_overrides": [
+                        {
+                            "port_idx": 1,
+                            "name": "Office",
+                            "port_security_enabled": True,
+                            "native_networkconf_id": "",
+                            "voice_networkconf_id": "",
+                            "tagged_vlan_mgmt": "block_all",
+                            "forward": "disabled",
+                        }
+                    ],
+                    "port_table": [
+                        {"enable": True, "port_idx": 1},
+                        {"enable": True, "port_idx": 2},
+                    ],
+                }
+            ],
+            DeviceSetPortEnabledRequest,
+            {"port_idx": 1, "enabled": True},
+            {
+                "port_overrides": [
+                    {
+                        "port_idx": 1,
+                        "name": "Office",
+                        "port_security_enabled": False,
+                        "tagged_vlan_mgmt": "auto",
+                    }
+                ]
+            },
+        ),
+        (  # Port enable of a port left blocked by an earlier enable
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "port_overrides": [
+                        {
+                            "port_idx": 1,
+                            "port_security_enabled": False,
+                            "native_networkconf_id": "",
+                            "voice_networkconf_id": "",
+                            "tagged_vlan_mgmt": "block_all",
+                            "forward": "disabled",
+                            "excluded_networkconf_ids": ["guest"],
+                        }
+                    ],
+                    "port_table": [
+                        {"enable": True, "port_idx": 1},
+                        {"enable": True, "port_idx": 2},
+                    ],
+                }
+            ],
+            DeviceSetPortEnabledRequest,
+            {"port_idx": 1, "enabled": True},
+            {
+                "port_overrides": [
+                    {
+                        "port_idx": 1,
+                        "port_security_enabled": False,
+                        "tagged_vlan_mgmt": "auto",
+                    }
+                ]
+            },
+        ),
+        (  # Port enable keeps the networks of a port that isn't blocked
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "port_overrides": [
+                        {
+                            "port_idx": 1,
+                            "port_security_enabled": True,
+                            "native_networkconf_id": "iot",
+                            "tagged_vlan_mgmt": "block_all",
+                        }
+                    ],
+                    "port_table": [
+                        {"enable": True, "port_idx": 1},
+                        {"enable": True, "port_idx": 2},
+                    ],
+                }
+            ],
+            DeviceSetPortEnabledRequest,
+            {"port_idx": 1, "enabled": True},
+            {
+                "port_overrides": [
+                    {
+                        "port_idx": 1,
+                        "port_security_enabled": False,
+                        "native_networkconf_id": "iot",
+                        "tagged_vlan_mgmt": "block_all",
+                    }
+                ]
+            },
+        ),
+        (  # Port enable with port profile
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "port_overrides": [
+                        {
+                            "port_idx": 1,
+                            "port_security_enabled": True,
+                            "portconf_id": "123",
+                        }
+                    ],
+                    "port_table": [
+                        {"enable": False, "port_idx": 1, "portconf_id": "123"}
+                    ],
+                }
+            ],
+            DeviceSetPortEnabledRequest,
+            {"port_idx": 1, "enabled": True},
+            {
+                "port_overrides": [
+                    {
+                        "port_idx": 1,
+                        "port_security_enabled": False,
+                        "portconf_id": "123",
+                    }
+                ]
+            },
+        ),
+        (  # Port enable without existing override
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "port_overrides": [],
+                    "port_table": [
+                        {"enable": True, "port_idx": 1},
+                        {"enable": True, "port_idx": 2},
+                    ],
+                }
+            ],
+            DeviceSetPortEnabledRequest,
+            {"port_idx": 1, "enabled": True},
+            {"port_overrides": [{"port_idx": 1, "port_security_enabled": False}]},
+        ),
+        (  # Port enable and disable multiple ports
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "port_overrides": [{"port_idx": 1, "name": "Office"}],
+                    "port_table": [
+                        {"enable": True, "port_idx": 1},
+                        {"enable": True, "port_idx": 2},
+                    ],
+                }
+            ],
+            DeviceSetPortEnabledRequest,
+            {"targets": [(1, False), (2, True)]},
+            {
+                "port_overrides": [
+                    {"port_idx": 1, "name": "Office", "port_security_enabled": True},
+                    {"port_idx": 2, "port_security_enabled": False},
+                ]
+            },
+        ),
+    ],
+)
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_sub_device_requests(
+    mock_aioresponse: aioresponses,
+    unifi_controller: Controller,
+    unifi_called_with: Callable[[str, str, dict[str, Any]], bool],
+    api_request: DeviceSetOutletRelayRequest
+    | DeviceSetOutletCycleEnabledRequest
+    | DeviceSetPoePortModeRequest
+    | DeviceSetPortEnabledRequest,
+    data: dict[str, Any],
+    command: dict[str, Any],
+) -> None:
+    """Test sub device (port/outlet) commands."""
+    devices = unifi_controller.devices
+    await devices.update()
+    device = next(iter(devices.values()))
+    mock_aioresponse.put("https://host:8443/api/s/default/rest/device/01", payload={})
+    await unifi_controller.request(api_request.create(device, **data))
+    assert unifi_called_with("put", "/api/s/default/rest/device/01", json=command)
+
+
+@pytest.mark.parametrize(("device_payload"), [[SWITCH_16_PORT_POE]])
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_set_poe_request_raise_error(unifi_controller: Controller) -> None:
+    """Test device class."""
+    await unifi_controller.devices.update()
+    device = next(iter(unifi_controller.devices.values()))
+    with pytest.raises(AttributeError):
+        DeviceSetPoePortModeRequest.create(device)
+
+
+@pytest.mark.parametrize(("device_payload"), [[SWITCH_16_PORT_POE]])
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_set_port_enabled_request_raise_error(
+    unifi_controller: Controller,
+) -> None:
+    """Test device port enable request raises error without proper arguments."""
+    await unifi_controller.devices.update()
+    device = next(iter(unifi_controller.devices.values()))
+    with pytest.raises(AttributeError):
+        DeviceSetPortEnabledRequest.create(device)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"port_idx": 1, "enabled": True},
+        {"port_idx": 1, "enabled": False},
+        {"targets": [(2, False), (1, True)]},
+    ],
+)
+async def test_set_port_enabled_request_refuses_mac_filtering(
+    data: dict[str, Any],
+) -> None:
+    """Test ports using MAC address filtering are not switched."""
+    raw = {
+        "device_id": "01",
+        "mac": "0",
+        "port_overrides": [
+            {
+                "port_idx": 1,
+                "port_security_enabled": True,
+                "port_security_mac_address": ["00:00:00:00:00:01"],
+            }
+        ],
+        "port_table": [
+            {"port_idx": 1, "enable": True},
+            {"port_idx": 2, "enable": True},
+        ],
+    }
+    device = Device(deepcopy(raw))
+    with pytest.raises(ValueError, match="^Port 1 uses MAC address filtering$"):
+        DeviceSetPortEnabledRequest.create(device, **data)
+    assert device.raw == raw
+
+
+async def test_set_port_enabled_request_leaves_device_unchanged() -> None:
+    """Test the request does not change the device data."""
+    raw = {
+        "device_id": "01",
+        "mac": "0",
+        "port_overrides": [
+            {
+                "port_idx": 1,
+                "port_security_enabled": False,
+                "native_networkconf_id": "",
+                "tagged_vlan_mgmt": "block_all",
+            }
+        ],
+        "port_table": [
+            {"port_idx": 1, "enable": False},
+            {"port_idx": 2, "enable": True},
+        ],
+    }
+    device = Device(deepcopy(raw))
+    DeviceSetPortEnabledRequest.create(device, targets=[(1, True), (2, False)])
+    assert device.raw == raw
+
+
+async def test_device_websocket(
+    unifi_controller: Controller, new_ws_data_fn: Callable[[dict[str, Any]], None]
+) -> None:
+    """Test controller managing devices."""
+    assert len(unifi_controller.devices._subscribers["*"]) == 2
+
+    unsub = unifi_controller.devices.subscribe(mock_callback := Mock())
+    assert len(unifi_controller.devices._subscribers["*"]) == 3
+    assert mock_callback.call_count == 0
+
+    # Add client from websocket
+    new_ws_data_fn(
+        {
+            "meta": {"message": MessageKey.DEVICE.value},
+            "data": [SWITCH_16_PORT_POE],
+        }
+    )
+    assert len(unifi_controller.devices.items()) == 1
+    assert len(unifi_controller.devices._subscribers["*"]) == 3
+
+    unsub()
+    assert len(unifi_controller.devices._subscribers["*"]) == 2
+
+
+def test_enum_unknowns() -> None:
+    """Validate enum unknown values."""
+    assert DeviceState(999) == DeviceState.UNKNOWN
+    assert DeviceType("future-device-type") == DeviceType.UNKNOWN
+
+
+def test_device_type_enum() -> None:
+    """Validate DeviceType string enum behavior."""
+    assert DeviceType.ACCESS_POINT == "uap"
+    assert DeviceType.SMART_POWER == "usp"
+    assert DeviceType.SWITCH == "usw"
+    assert str(DeviceType.SECURITY_GATEWAY) == "ugw"
+
+
+def test_battery_pool() -> None:
+    """Verify UPS battery pool data."""
+    ups_2u_pro = Device(UPS_2U_PRO)
+    assert ups_2u_pro.vbms_table == UPS_2U_PRO["vbms_table"]
+    assert ups_2u_pro.battery_pool == UPS_2U_PRO["vbms_table"]["battpool"]
+    assert ups_2u_pro.battery_pool is not None
+    assert ups_2u_pro.battery_pool["batt_available_cnt"] == 6
+    assert ups_2u_pro.battery_pool["device_input_voltage"] == 121.9
+    assert "device_bypass_voltage" not in ups_2u_pro.battery_pool
+    assert ups_2u_pro.vbms_table["epo_enabled"] is False
+    assert ups_2u_pro.vbms_table["is_battery_mode"] is False
+
+    ups_2u = Device(UPS_2U)
+    assert ups_2u.vbms_table == UPS_2U["vbms_table"]
+    assert ups_2u.battery_pool == UPS_2U["vbms_table"]["battpool"]
+    assert ups_2u.battery_pool is not None
+    assert ups_2u.battery_pool["batt_available_cnt"] == 1
+    assert ups_2u.battery_pool["device_bypass_voltage"] == 120.30000305175781
+    assert "device_input_voltage" not in ups_2u.battery_pool
+    assert "epo_enabled" not in ups_2u.vbms_table
+    assert ups_2u.vbms_table["is_battery_mode"] is False
+    assert all("outlet_power" not in outlet for outlet in ups_2u.outlet_table)
+
+    assert Device({"mac": "0"}).vbms_table is None
+    assert Device({"mac": "0"}).battery_pool is None
+
+
+@pytest.mark.parametrize(
+    ("raw_band", "expected"),
+    [
+        ("ng", WifiBand.BAND_2_4GHZ),
+        ("na", WifiBand.BAND_5GHZ),
+        ("6e", WifiBand.BAND_6GHZ),
+    ],
+)
+def test_wifi_band_enum_mapping(raw_band: str, expected: WifiBand) -> None:
+    """Verify known WiFi band values map to enum members."""
+    band = WifiBand(raw_band)
+    assert band == expected
+    assert str(band) == raw_band
+
+
+def test_wifi_band_unknown_fallback(caplog: pytest.LogCaptureFixture) -> None:
+    """Verify unknown WiFi band values map to UNKNOWN."""
+    band = WifiBand("future-band")
+    assert band == WifiBand.UNKNOWN
+    assert band == "unknown"
+    assert "Unsupported WiFi band future-band" in caplog.text
+
+
+def test_device_get_radio_band() -> None:
+    """Verify band lookup on Device radio table."""
+    device = Device(
+        {
+            "radio_table": [
+                {"name": "wifi0", "radio": "ng"},
+                {"name": "wifi1", "radio": "na"},
+                {"name": "wifi2", "radio": "6e"},
+                {"name": "wifi3", "radio": "future-band"},
+            ]
+        }
     )
 
-    assert len(devices.values()) == 0
-
-
-async def test_device_access_point(unifi_controller):
-    """Test device class on an access point."""
-    devices = Devices([ACCESS_POINT_AC_PRO], unifi_controller.request)
-
-    assert len(devices.values()) == 1
-
-    access_point = devices[ACCESS_POINT_AC_PRO["mac"]]
-    assert access_point.board_rev == 21
-    assert access_point.considered_lost_at == 1588175837
-    assert access_point.disabled is False
-    assert access_point.id == "235678987654345678"
-    assert access_point.ip == "192.168.0.4"
-    assert access_point.downlink_table == []
-    assert access_point.fan_level is None
-    assert access_point.has_fan is False
-    assert access_point.last_seen == 1588175726
-    assert access_point.lldp_table == []
-    assert access_point.mac == "80:2a:a8:00:01:02"
-    assert access_point.model == "U7PG2"
-    assert access_point.name == "ACCESS POINT AC PRO"
-    assert access_point.next_heartbeat_at == 1588175763
-    assert access_point.overheating is False
-    assert access_point.port_overrides == []
-    assert access_point.port_table == ACCESS_POINT_AC_PRO["port_table"]
-    assert access_point.state == 1
-    assert access_point.sys_stats == {
-        "loadavg_1": "0.15",
-        "loadavg_15": "0.02",
-        "loadavg_5": "0.08",
-        "mem_buffer": 0,
-        "mem_total": 128622592,
-        "mem_used": 63606784,
-    }
-    assert access_point.type == "uap"
-    assert access_point.version == "4.0.69.10871"
-    assert access_point.upgradable is True
-    assert access_point.upgrade_to_firmware == "4.0.80.10875"
-    assert access_point.uplink == ACCESS_POINT_AC_PRO["uplink"]
-    assert access_point.uplink_depth is None
-    assert access_point.user_num_sta == 12
-    assert access_point.wlan_overrides == [
-        {
-            "name": "My5GHzSSID1",
-            "radio": "na",
-            "radio_name": "wifi1",
-            "wlan_id": "012345678910111213141516",
-        },
+    assert device.radio_table == [
+        {"name": "wifi0", "radio": "ng"},
+        {"name": "wifi1", "radio": "na"},
+        {"name": "wifi2", "radio": "6e"},
+        {"name": "wifi3", "radio": "future-band"},
     ]
-    assert (
-        access_point.__repr__() == f"<Device {access_point.name}: {access_point.mac}>"
-    )
-
-    assert len(access_point.ports.values()) == 2
-
-    access_point_port_1 = access_point.ports[1]
-    assert access_point_port_1.ifname == ""
-    assert access_point_port_1.media == "GE"
-    assert access_point_port_1.name == "Main"
-    assert access_point_port_1.port_idx == 1
-    assert access_point_port_1.poe_class == ""
-    assert access_point_port_1.poe_enable is None
-    assert access_point_port_1.poe_mode == ""
-    assert access_point_port_1.poe_power == ""
-    assert access_point_port_1.poe_voltage == ""
-    assert access_point_port_1.portconf_id == "5a32aa4"
-    assert access_point_port_1.port_poe is False
-    assert access_point_port_1.up is True
-    assert (
-        access_point_port_1.__repr__()
-        == f"<{access_point_port_1.name}: Poe {access_point_port_1.poe_enable}>"
-    )
-
-    access_point_port_2 = access_point.ports[2]
-    assert access_point_port_2.ifname == ""
-    assert access_point_port_2.media == "GE"
-    assert access_point_port_2.name == "Secondary"
-    assert access_point_port_2.port_idx == 2
-    assert access_point_port_2.poe_class == ""
-    assert access_point_port_2.poe_enable is None
-    assert access_point_port_2.poe_mode == ""
-    assert access_point_port_2.poe_power == ""
-    assert access_point_port_2.poe_voltage == ""
-    assert access_point_port_2.portconf_id == "5a32aa4"
-    assert access_point_port_2.port_poe is False
-    assert access_point_port_2.up is False
-    assert (
-        access_point_port_2.__repr__()
-        == f"<{access_point_port_2.name}: Poe {access_point_port_2.poe_enable}>"
-    )
+    assert device.get_radio_band("wifi0") == WifiBand.BAND_2_4GHZ
+    assert device.get_radio_band("wifi1") == WifiBand.BAND_5GHZ
+    assert device.get_radio_band("wifi2") == WifiBand.BAND_6GHZ
+    assert device.get_radio_band("wifi3") == WifiBand.UNKNOWN
+    assert device.get_radio_band("wifi99") == WifiBand.UNKNOWN
 
 
-async def test_device_security_gateway(unifi_controller):
-    """Test device class on a security gateway."""
-    devices = Devices([GATEWAY_USG3], unifi_controller.request)
-
-    assert len(devices.values()) == 1
-
-    gateway = devices[GATEWAY_USG3["mac"]]
-    assert gateway.board_rev == 16
-    assert gateway.considered_lost_at == 1588175842
-    assert gateway.disabled is False
-    assert gateway.id == "235678987654345678"
-    assert gateway.ip == "1.2.3.4"
-    assert gateway.downlink_table == []
-    assert gateway.fan_level is None
-    assert gateway.has_fan is False
-    assert gateway.last_seen == 1588175740
-    assert gateway.lldp_table == []
-    assert gateway.mac == "78:8a:20:33:44:55"
-    assert gateway.model == "UGW3"
-    assert gateway.name == "USG"
-    assert gateway.next_heartbeat_at == 1588175774
-    assert gateway.overheating is False
-    assert gateway.port_overrides == []
-    assert gateway.port_table == GATEWAY_USG3["port_table"]
-    assert gateway.state == 1
-    assert gateway.sys_stats == {
-        "loadavg_1": "0.03",
-        "loadavg_15": "0.08",
-        "loadavg_5": "0.07",
-        "mem_buffer": 57561088,
-        "mem_total": 507412480,
-        "mem_used": 293453824,
-    }
-    assert gateway.type == "ugw"
-    assert gateway.version == "4.4.44.5213844"
-    assert gateway.upgradable is True
-    assert gateway.upgrade_to_firmware == "4.4.50.5272448"
-    assert gateway.uplink == GATEWAY_USG3["uplink"]
-    assert gateway.uplink_depth is None
-    assert gateway.user_num_sta == 20
-    assert gateway.wlan_overrides == []
-    assert gateway.__repr__() == f"<Device {gateway.name}: {gateway.mac}>"
-
-    assert len(gateway.ports.values()) == 3
-
-    gateway_port_eth0 = gateway.ports["eth0"]
-    assert gateway_port_eth0.ifname == "eth0"
-    assert gateway_port_eth0.media == ""
-    assert gateway_port_eth0.name == "wan"
-    assert gateway_port_eth0.port_idx is None
-    assert gateway_port_eth0.poe_class == ""
-    assert gateway_port_eth0.poe_enable is None
-    assert gateway_port_eth0.poe_mode == ""
-    assert gateway_port_eth0.poe_power == ""
-    assert gateway_port_eth0.poe_voltage == ""
-    assert gateway_port_eth0.portconf_id == ""
-    assert gateway_port_eth0.port_poe is False
-    assert gateway_port_eth0.up is True
-    assert (
-        gateway_port_eth0.__repr__()
-        == f"<{gateway_port_eth0.name}: Poe {gateway_port_eth0.poe_enable}>"
-    )
-
-    gateway_port_eth1 = gateway.ports["eth1"]
-    assert gateway_port_eth1.ifname == "eth1"
-    assert gateway_port_eth1.media == ""
-    assert gateway_port_eth1.name == "lan"
-    assert gateway_port_eth1.port_idx is None
-    assert gateway_port_eth1.poe_class == ""
-    assert gateway_port_eth1.poe_enable is None
-    assert gateway_port_eth1.poe_mode == ""
-    assert gateway_port_eth1.poe_power == ""
-    assert gateway_port_eth1.poe_voltage == ""
-    assert gateway_port_eth1.portconf_id == ""
-    assert gateway_port_eth1.port_poe is False
-    assert gateway_port_eth1.up is True
-    assert (
-        gateway_port_eth1.__repr__()
-        == f"<{gateway_port_eth1.name}: Poe {gateway_port_eth1.poe_enable}>"
-    )
-
-    gateway_port_eth2 = gateway.ports["eth2"]
-    assert gateway_port_eth2.ifname == "eth2"
-    assert gateway_port_eth2.media == ""
-    assert gateway_port_eth2.name == "lan2"
-    assert gateway_port_eth2.port_idx is None
-    assert gateway_port_eth2.poe_class == ""
-    assert gateway_port_eth2.poe_enable is None
-    assert gateway_port_eth2.poe_mode == ""
-    assert gateway_port_eth2.poe_power == ""
-    assert gateway_port_eth2.poe_voltage == ""
-    assert gateway_port_eth2.portconf_id == ""
-    assert gateway_port_eth2.port_poe is False
-    assert gateway_port_eth2.up is False
-    assert (
-        gateway_port_eth2.__repr__()
-        == f"<{gateway_port_eth2.name}: Poe {gateway_port_eth2.poe_enable}>"
-    )
-
-
-async def test_device_switch(mock_aioresponse, unifi_controller):
-    """Test device class on aswitch."""
-    devices = Devices([SWITCH_16_PORT_POE], unifi_controller.request)
-
-    assert len(devices.values()) == 1
-
-    switch = devices[SWITCH_16_PORT_POE["mac"]]
-    assert switch.board_rev == 9
-    assert switch.considered_lost_at == 1588175821
-    assert switch.disabled is False
-    assert switch.id == "235678987654345678"
-    assert switch.ip == "192.168.0.57"
-    assert switch.downlink_table == []
-    assert switch.fan_level == 0
-    assert switch.has_fan is True
-    assert switch.last_seen == 1588175722
-    assert switch.lldp_table == []
-    assert switch.mac == "fc:ec:da:11:22:33"
-    assert switch.model == "US16P150"
-    assert switch.name == "Switch 16"
-    assert switch.next_interval == 23
-    assert switch.next_heartbeat_at == 1588175755
-    assert switch.overheating is False
-    assert switch.port_overrides == [
-        {
-            "poe_mode": "off",
-            "port_idx": 3,
-            "portconf_id": "5a32aa4ee4babd4452422ddd22222",
-        },
-        {
-            "poe_mode": "auto",
-            "port_idx": 4,
-            "portconf_id": "5a32aa4ee4babd4452422ddd22222",
-        },
-        {
-            "poe_mode": "auto",
-            "port_idx": 16,
-            "portconf_id": "5a32aa4ee4babd4452422ddd22222",
-        },
-    ]
-    assert switch.port_table == SWITCH_16_PORT_POE["port_table"]
-    assert switch.state == 1
-    assert switch.sys_stats == {
-        "loadavg_1": "2.82",
-        "loadavg_15": "2.81",
-        "loadavg_5": "2.80",
-        "mem_buffer": 0,
-        "mem_total": 262402048,
-        "mem_used": 129331200,
-    }
-    assert switch.type == "usw"
-    assert switch.version == "4.0.66.10832"
-    assert switch.upgradable is True
-    assert switch.upgrade_to_firmware == "4.0.80.10875"
-    assert switch.uplink == SWITCH_16_PORT_POE["uplink"]
-    assert switch.uplink_depth == 2
-    assert switch.user_num_sta == 4
-    assert switch.wlan_overrides == []
-    assert switch.__repr__() == f"<Device {switch.name}: {switch.mac}>"
-
+@pytest.mark.parametrize(
+    ("device_payload", "data", "command"),
+    [
+        (
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "led_override": "on",
+                    "led_override_color": "#0060fd",
+                    "led_override_color_brightness": 100,
+                    "hw_caps": 2562,
+                }
+            ],
+            {"status": "off", "color": "#65e8a4", "brightness": 50},
+            {
+                "led_override": "off",
+                "led_override_color": "#65e8a4",
+                "led_override_color_brightness": 50,
+            },
+        ),
+        (
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "led_override": "on",
+                    "led_override_color": "#0060fd",
+                    "led_override_color_brightness": 100,
+                    "hw_caps": 2562,
+                }
+            ],
+            {"status": "off", "brightness": 0},
+            {
+                "led_override": "off",
+                "led_override_color_brightness": 0,
+            },
+        ),
+        (
+            [
+                {
+                    "device_id": "01",
+                    "mac": "0",
+                    "led_override": "on",
+                    "led_override_color": "#0060fd",
+                    "led_override_color_brightness": 100,
+                    "hw_caps": 2562,
+                }
+            ],
+            {"color": "#ffffff"},
+            {
+                "led_override": "on",
+                "led_override_color": "#ffffff",
+            },
+        ),
+    ],
+)
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_led_status_request(
+    mock_aioresponse: aioresponses,
+    unifi_controller: Controller,
+    unifi_called_with: Callable[[str, str, dict[str, Any]], bool],
+    device_payload: list[dict[str, Any]],
+    data: dict[str, Any],
+    command: dict[str, Any],
+) -> None:
+    """Tests LED status requests."""
+    devices = unifi_controller.devices
+    await devices.update()
+    device = next(iter(devices.values()))
     mock_aioresponse.put(
-        "https://host:8443/api/s/default/rest/device/235678987654345678",
-        payload="",
-        repeat=True,
+        f"https://host:8443/api/s/default/rest/device/{device.id}", payload={}
     )
-    await switch.async_set_port_poe_mode(1, "off")
-    assert verify_call(
-        mock_aioresponse,
-        "put",
-        "https://host:8443/api/s/default/rest/device/235678987654345678",
-        json={
-            "port_overrides": [
+    api_request = DeviceSetLedStatus.create(device, **data)
+    await unifi_controller.request(api_request)
+    assert unifi_called_with(
+        "put", f"/api/s/default/rest/device/{device.id}", json=command
+    )
+
+
+@pytest.mark.parametrize(
+    ("device_payload", "data"),
+    [
+        (
+            [
                 {
-                    "poe_mode": "off",
-                    "port_idx": 3,
-                    "portconf_id": "5a32aa4ee4babd4452422ddd22222",
-                },
+                    "device_id": "01",
+                    "mac": "0",
+                    "led_override": "on",
+                    "led_override_color": "#0060fd",
+                    "led_override_color_brightness": 100,
+                    "hw_caps": 2562,
+                }
+            ],
+            {"status": "off", "color": "foobar", "brightness": 100},
+        ),
+        (
+            [
                 {
-                    "poe_mode": "auto",
-                    "port_idx": 4,
-                    "portconf_id": "5a32aa4ee4babd4452422ddd22222",
-                },
+                    "device_id": "01",
+                    "mac": "0",
+                    "led_override": "on",
+                    "led_override_color": "#0060fd",
+                    "led_override_color_brightness": 100,
+                    "hw_caps": 2562,
+                }
+            ],
+            {"status": "off", "brightness": -99},
+        ),
+    ],
+)
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_led_status_request_exception(
+    mock_aioresponse: aioresponses,
+    unifi_controller: Controller,
+    unifi_called_with: Callable[[str, str, dict[str, Any]], bool],
+    device_payload: list[dict[str, Any]],
+    data: dict[str, Any],
+) -> None:
+    """Tests LED status requests raise AttributeError."""
+    devices = unifi_controller.devices
+    await devices.update()
+    device = next(iter(devices.values()))
+    mock_aioresponse.put(
+        f"https://host:8443/api/s/default/rest/device/{device.id}", payload={}
+    )
+    with pytest.raises(AttributeError):
+        DeviceSetLedStatus.create(device, **data)
+
+
+@pytest.mark.parametrize(
+    ("device_payload"),
+    [
+        (
+            [
                 {
-                    "poe_mode": "auto",
-                    "port_idx": 16,
-                    "portconf_id": "5a32aa4ee4babd4452422ddd22222",
-                },
-                {
-                    "port_idx": 1,
-                    "portconf_id": "5a32aa4ee4babd4452422ddd22222",
-                    "poe_mode": "off",
-                },
+                    "device_id": "01",
+                    "mac": "0",
+                    "locating": False,
+                }
             ]
-        },
+        )
+    ],
+)
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_locate_status_request(
+    mock_aioresponse: aioresponses,
+    unifi_controller: Controller,
+    unifi_called_with: Callable[[str, str, dict[str, Any]], bool],
+    device_payload: list[dict[str, Any]],
+) -> None:
+    """Tests locate status requests and helpers."""
+    devices = unifi_controller.devices
+    await devices.update()
+    device = next(iter(devices.values()))
+    assert device.locating is False
+    assert device.supports_locating
+
+    mock_aioresponse.post("https://host:8443/api/s/default/cmd/devmgr", payload={})
+    await unifi_controller.request(DeviceLocateRequest.create(device.mac, True))
+    assert unifi_called_with(
+        "post",
+        "/api/s/default/cmd/devmgr",
+        json={"cmd": "set-locate", "mac": device.mac},
     )
 
-    await switch.async_set_port_poe_mode(3, "off")
-    assert verify_call(
-        mock_aioresponse,
-        "put",
-        "https://host:8443/api/s/default/rest/device/235678987654345678",
-        json={
-            "port_overrides": [
-                {
-                    "poe_mode": "off",
-                    "port_idx": 3,
-                    "portconf_id": "5a32aa4ee4babd4452422ddd22222",
-                },
-                {
-                    "poe_mode": "auto",
-                    "port_idx": 4,
-                    "portconf_id": "5a32aa4ee4babd4452422ddd22222",
-                },
-                {
-                    "poe_mode": "auto",
-                    "port_idx": 16,
-                    "portconf_id": "5a32aa4ee4babd4452422ddd22222",
-                },
-                {
-                    "port_idx": 1,
-                    "portconf_id": "5a32aa4ee4babd4452422ddd22222",
-                    "poe_mode": "off",
-                },
-            ]
-        },
-    )
 
-    assert len(switch.ports.values()) == 18
+@pytest.mark.parametrize(("device_payload"), [[GATEWAY_USG3]])
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_update_stats(unifi_controller: Controller) -> None:
+    """Test device class uptime stats."""
+    await unifi_controller.devices.update()
+    device = next(iter(unifi_controller.devices.values()))
 
-    switch_port_1 = switch.ports[1]
-    assert switch_port_1.ifname == ""
-    assert switch_port_1.media == "GE"
-    assert switch_port_1.name == "Port 1"
-    assert switch_port_1.port_idx == 1
-    assert switch_port_1.poe_class == "Unknown"
-    assert switch_port_1.poe_enable is False
-    assert switch_port_1.poe_mode == "auto"
-    assert switch_port_1.poe_power == "0.00"
-    assert switch_port_1.poe_voltage == "0.00"
-    assert switch_port_1.portconf_id == "5a32aa4ee4babd4452422ddd22222"
-    assert switch_port_1.port_poe is True
-    assert switch_port_1.up is True
+    assert device.uptime_stats is not None
+    assert len(device.uptime_stats["WAN"].get("monitors")) == 3
+    assert len(device.uptime_stats["WAN2"].get("monitors")) == 3
+    assert (wan3 := device.uptime_stats.get("WAN3")) is not None
+    assert len(wan3.get("monitors")) == 3
+    assert wan3["monitors"][1].get("target") == "google.com"
+    assert wan3["monitors"][1].get("latency_average") == 32
+
+    assert device.uptime_stats["WAN"].get("monitors")[0].get("availability") == 100.0
+    assert device.uptime_stats["WAN"].get("monitors")[0].get("latency_average") == 5
     assert (
-        switch_port_1.__repr__()
-        == f"<{switch_port_1.name}: Poe {switch_port_1.poe_enable}>"
+        device.uptime_stats["WAN"].get("monitors")[0].get("target")
+        == "www.microsoft.com"
+    )
+    assert device.uptime_stats["WAN"].get("monitors")[0].get("type") == "icmp"
+
+
+@pytest.mark.parametrize(
+    ("device_payload"),
+    [[GATEWAY_USG3 | {"uptime_stats": UDM_PRO_MAX_UPTIME_STATS}]],
+)
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_update_stats_aggregates(unifi_controller: Controller) -> None:
+    """Test uptime stats groups carrying aggregates and no monitors."""
+    await unifi_controller.devices.update()
+    device = next(iter(unifi_controller.devices.values()))
+
+    assert device.uptime_stats is not None
+    assert set(device.uptime_stats) == {"WAN", "WAN3"}
+
+    wan = device.uptime_stats["WAN"]
+    assert wan.get("availability") == 100.0
+    assert wan.get("latency_average") == 15
+    assert wan.get("time_period") == 86400
+    assert wan.get("uptime") == 808277
+    assert len(wan.get("monitors", [])) == 3
+    # A monitor that never got a response omits latency_average entirely.
+    assert "latency_average" not in wan["monitors"][0]
+    assert wan["monitors"][0].get("availability") == 0.0
+    assert len(wan.get("alerting_monitors", [])) == 3
+    assert wan["alerting_monitors"][1].get("target") == "1.1.1.1"
+    assert wan["alerting_monitors"][1].get("type") == "dns"
+
+    # A GRE tunnelled 5G WAN reports aggregates but omits "monitors" entirely.
+    wan3 = device.uptime_stats["WAN3"]
+    assert "monitors" not in wan3
+    assert wan3.get("monitors") is None
+    assert wan3.get("monitors", []) == []
+    assert wan3.get("availability") == 99.73679998517036
+    assert wan3.get("latency_average") == 24
+    assert wan3.get("time_period") == 22745
+    assert wan3.get("uptime") == 137062
+    assert len(wan3.get("alerting_monitors", [])) == 1
+
+
+@pytest.mark.parametrize(("device_payload"), [[GATEWAY_USG3]])
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_storage(unifi_controller: Controller) -> None:
+    """Test device class storage."""
+    await unifi_controller.devices.update()
+    device = next(iter(unifi_controller.devices.values()))
+
+    assert device.storage is not None
+    assert len(device.storage) == 2
+
+    assert device.storage[0]["mount_point"] == "/persistent"
+    assert device.storage[0]["name"] == "Backup"
+    assert device.storage[0]["size"] == 2040373248
+    assert device.storage[0]["type"] == "eMMC"
+    assert device.storage[0]["used"] == 148353024
+
+
+@pytest.mark.parametrize(("device_payload"), [[GATEWAY_USG3]])
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_temperatures(unifi_controller: Controller) -> None:
+    """Test device class temperatures."""
+    await unifi_controller.devices.update()
+    device = next(iter(unifi_controller.devices.values()))
+
+    assert device.temperatures is not None
+    assert len(device.temperatures) == 3
+
+    assert device.temperatures[0]["name"] == "CPU"
+    assert device.temperatures[0]["type"] == "cpu"
+    assert device.temperatures[0]["value"] == 66.0
+
+
+@pytest.mark.parametrize(
+    ("device_payload"), [[GATEWAY_USG3 | {"psu_table": UDW_PSU_TABLE}]]
+)
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_psu_table(unifi_controller: Controller) -> None:
+    """Test device power supply table."""
+    await unifi_controller.devices.update()
+    device = next(iter(unifi_controller.devices.values()))
+
+    assert len(device.psu_table) == 2
+
+    psu = device.psu_table[0]
+    assert psu["label"] == "psu1"
+    assert psu["present"] is True
+    assert psu["online"] is True
+    assert psu["power"] == 67.0
+    assert psu["power_capacity"] == 550.0
+    assert psu["voltage"] == 54.0
+    assert psu["current"] == 1.23
+
+    assert device.psu_table[1]["label"] == "psu2"
+    assert device.psu_table[1]["present"] is False
+
+
+@pytest.mark.parametrize(("device_payload"), [[GATEWAY_USG3]])
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_psu_table_missing(unifi_controller: Controller) -> None:
+    """Test device without power supply table."""
+    await unifi_controller.devices.update()
+    device = next(iter(unifi_controller.devices.values()))
+
+    assert device.psu_table == []
+
+
+@pytest.mark.parametrize(
+    ("device_payload"), [[GATEWAY_USG3 | GATEWAY_IPS_ENGINE_PENDING]]
+)
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_ips_engine_upgrade_pending(unifi_controller: Controller) -> None:
+    """Test device IPS fields with a Suricata engine upgrade queued."""
+    await unifi_controller.devices.update()
+    device = next(iter(unifi_controller.devices.values()))
+
+    assert device.suricata_version == 6
+    assert device.supported_suricata_version == 8
+    assert device.suricata_upgrade_pending_target == 8
+    assert device.ips_rule_count == 33157
+    assert device.ips_signature_type == "ET"
+    assert device.ips_signature_updated == 1791932737
+    assert device.ids_ips_signature is not None
+    assert (
+        device.ids_ips_signature["sha_256"]
+        == "eFFy8UIdCQMfp16I2yceZfFCZUQep4bUE+Fe9YIt4js="
     )
 
-    switch_port_2 = switch.ports[2]
-    assert switch_port_2.ifname == ""
-    assert switch_port_2.media == "GE"
-    assert switch_port_2.name == "Port 2"
-    assert switch_port_2.port_idx == 2
-    assert switch_port_2.poe_class == "Unknown"
-    assert switch_port_2.poe_enable is False
-    assert switch_port_2.poe_mode == "auto"
-    assert switch_port_2.poe_power == "0.00"
-    assert switch_port_2.poe_voltage == "0.00"
-    assert switch_port_2.portconf_id == "5a32aa4ee4babd4452422ddd22222"
-    assert switch_port_2.port_poe is True
-    assert switch_port_2.up is False
-    assert (
-        switch_port_2.__repr__()
-        == f"<{switch_port_2.name}: Poe {switch_port_2.poe_enable}>"
-    )
 
-    switch_port_3 = switch.ports[3]
-    assert switch_port_3.ifname == ""
-    assert switch_port_3.media == "GE"
-    assert switch_port_3.name == "Port 3"
-    assert switch_port_3.port_idx == 3
-    assert switch_port_3.poe_class == "Class 3"
-    assert switch_port_3.poe_enable is True
-    assert switch_port_3.poe_mode == "auto"
-    assert switch_port_3.poe_power == "3.24"
-    assert switch_port_3.poe_voltage == "53.78"
-    assert switch_port_3.portconf_id == "5a32aa4ee4babd4452422ddd22222"
-    assert switch_port_3.port_poe is True
-    assert switch_port_3.up is True
-    assert (
-        switch_port_3.__repr__()
-        == f"<{switch_port_3.name}: Poe {switch_port_3.poe_enable}>"
-    )
+@pytest.mark.parametrize(
+    ("device_payload"), [[GATEWAY_USG3 | GATEWAY_IPS_ENGINE_SWAPPED]]
+)
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_ips_engine_swapped(unifi_controller: Controller) -> None:
+    """Test device IPS fields right after a Suricata engine swap."""
+    await unifi_controller.devices.update()
+    device = next(iter(unifi_controller.devices.values()))
 
-    switch_port_4 = switch.ports[4]
-    assert switch_port_4.ifname == ""
-    assert switch_port_4.media == "GE"
-    assert switch_port_4.name == "Port 4"
-    assert switch_port_4.port_idx == 4
-    assert switch_port_4.poe_class == "Class 2"
-    assert switch_port_4.poe_enable is True
-    assert switch_port_4.poe_mode == "auto"
-    assert switch_port_4.poe_power == "1.50"
-    assert switch_port_4.poe_voltage == "53.85"
-    assert switch_port_4.portconf_id == "5a32aa4ee4babd4452422ddd22222"
-    assert switch_port_4.port_poe is True
-    assert switch_port_4.up is True
-    assert (
-        switch_port_4.__repr__()
-        == f"<{switch_port_4.name}: Poe {switch_port_4.poe_enable}>"
-    )
+    assert device.suricata_version == 8
+    assert device.supported_suricata_version == 8
+    assert device.suricata_upgrade_pending_target is None
+    assert device.ips_rule_count == 26656
+    assert device.ips_signature_type == "ET"
+    assert device.ips_signature_updated is None
 
-    switch_port_5 = switch.ports[5]
-    assert switch_port_5.ifname == ""
-    assert switch_port_5.media == "GE"
-    assert switch_port_5.name == "Port 5"
-    assert switch_port_5.port_idx == 5
-    assert switch_port_5.poe_class == "Unknown"
-    assert switch_port_5.poe_enable is False
-    assert switch_port_5.poe_mode == "auto"
-    assert switch_port_5.poe_power == "0.00"
-    assert switch_port_5.poe_voltage == "0.00"
-    assert switch_port_5.portconf_id == "5a32aa4ee4babd4452422ddd22222"
-    assert switch_port_5.port_poe is True
-    assert switch_port_5.up is False
-    assert (
-        switch_port_5.__repr__()
-        == f"<{switch_port_5.name}: Poe {switch_port_5.poe_enable}>"
-    )
 
-    switch_port_6 = switch.ports[6]
-    assert switch_port_6.ifname == ""
-    assert switch_port_6.media == "GE"
-    assert switch_port_6.name == "Port 6"
-    assert switch_port_6.port_idx == 6
-    assert switch_port_6.poe_class == "Unknown"
-    assert switch_port_6.poe_enable is False
-    assert switch_port_6.poe_mode == "auto"
-    assert switch_port_6.poe_power == "0.00"
-    assert switch_port_6.poe_voltage == "0.00"
-    assert switch_port_6.portconf_id == "5a32aa4ee4babd4452422ddd22222"
-    assert switch_port_6.port_poe is True
-    assert switch_port_6.up is False
-    assert (
-        switch_port_6.__repr__()
-        == f"<{switch_port_6.name}: Poe {switch_port_6.poe_enable}>"
-    )
+@pytest.mark.parametrize(("device_payload"), [[GATEWAY_USG3]])
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_ips_engine_missing(unifi_controller: Controller) -> None:
+    """Test device without IPS fields."""
+    await unifi_controller.devices.update()
+    device = next(iter(unifi_controller.devices.values()))
+
+    assert device.ids_ips_signature is None
+    assert device.ips_rule_count is None
+    assert device.ips_signature_type is None
+    assert device.ips_signature_updated is None
+    assert device.supported_suricata_version is None
+    assert device.suricata_upgrade_pending_target is None
+    assert device.suricata_version is None
+
+
+@pytest.mark.parametrize(("device_payload"), [[GATEWAY_USG3]])
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_wan_interfaces(unifi_controller: Controller) -> None:
+    """Test device WAN interface properties."""
+    await unifi_controller.devices.update()
+    device = next(iter(unifi_controller.devices.values()))
+
+    assert device.wan1 is not None
+    assert device.wan1["ip"] == "1.2.3.4"
+    assert device.wan1["mac"] == "78:8a:20:33:44:55"
+    assert device.wan1["ifname"] == "eth0"
+    assert device.wan1["up"] is True
+    assert device.wan1["speed"] == 1000
+
+    assert device.wan2 is not None
+    assert device.wan2["ip"] == "10.0.0.2"
+    assert device.wan2["mac"] == "78:8a:20:33:44:56"
+    assert device.wan2["ifname"] == "eth1"
+    assert device.wan2["up"] is True
+
+    assert device.wan3 is None
+    assert device.wan4 is None
+    assert device.wan5 is None
+    assert device.wan6 is None
+
+
+@pytest.mark.parametrize(("device_payload"), [[GATEWAY_USG3]])
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_wan_status(unifi_controller: Controller) -> None:
+    """Test device WAN status and active WAN properties."""
+    await unifi_controller.devices.update()
+    device = next(iter(unifi_controller.devices.values()))
+
+    assert device.last_wan_status is not None
+    assert device.last_wan_status["WAN"] == "online"
+    assert device.last_wan_status["WAN2"] == "online"
+
+    assert device.last_wan_ip == "1.2.3.4"
+
+
+@pytest.mark.parametrize(("device_payload"), [[ACCESS_POINT_AC_PRO]])
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_wan_not_present(unifi_controller: Controller) -> None:
+    """Test WAN properties return None for non-gateway devices."""
+    await unifi_controller.devices.update()
+    device = next(iter(unifi_controller.devices.values()))
+
+    assert device.wan1 is None
+    assert device.wan2 is None
+    assert device.last_wan_status is None
+    assert device.last_wan_ip is None

@@ -14,24 +14,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v2
-      - name: Set up Python 3.8
-        uses: actions/setup-python@v1
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
-          python-version: 3.8
+          python-version: "3.13"
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          pip install -r requirements-test.txt
-      - name: Lint with Flake8
+          pip install ".[requirements, requirements-test]"
+      - name: Check lint with Ruff
         run: |
-          flake8 aiounifi
-      - name: Check formatting with Black
+          ruff check aiounifi tests
+      - name: Check format with Ruff
         run: |
-          black aiounifi --check
-      - name: Check import order with isort
-        run: |
-          isort aiounifi --check-only
+          ruff format --check aiounifi tests
       - name: Check typing with mypy
         run: |
           mypy aiounifi

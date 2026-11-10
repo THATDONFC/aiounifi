@@ -3,33 +3,21 @@
 pytest --cov-report term-missing --cov=aiounifi.clients tests/test_clients.py
 """
 
+from collections.abc import Callable
+from typing import Any
+from unittest.mock import Mock
+
+from aioresponses import aioresponses
 import pytest
 
-from aiounifi.clients import Clients
+from aiounifi.controller import Controller
+from aiounifi.models.message import MessageKey
 
-from .fixtures import WIRED_CLIENT, WIRELESS_CLIENT
-from .test_controller import verify_call
-
-
-async def test_no_clients(mock_aioresponse, unifi_controller):
-    """Test that no clients also work."""
-    mock_aioresponse.get(
-        "https://host:8443/api/s/default/stat/sta",
-        payload={},
-    )
-
-    clients = Clients([], unifi_controller.request)
-    await clients.update()
-
-    assert verify_call(
-        mock_aioresponse, "get", "https://host:8443/api/s/default/stat/sta"
-    )
-    assert len(clients.values()) == 0
-
+from .fixtures import MESSAGE_WIRELESS_CLIENT_REMOVED, WIRED_CLIENT, WIRELESS_CLIENT
 
 test_data = [
     (
-        {"mac": "0"},
+        [{"mac": "0"}],
         {
             "access_point_mac": "",
             "association_time": 0,
@@ -54,9 +42,9 @@ test_data = [
             "oui": "",
             "powersave_enabled": None,
             "site_id": "",
-            "sw_depth": None,
-            "sw_mac": "",
-            "sw_port": None,
+            "switch_depth": None,
+            "switch_mac": "",
+            "switch_port": None,
             "rx_bytes": 0,
             "rx_bytes_r": 0,
             "tx_bytes": 0,
@@ -73,7 +61,7 @@ test_data = [
         },
     ),
     (
-        WIRELESS_CLIENT,
+        [WIRELESS_CLIENT],
         {
             "access_point_mac": "80:2a:a8:00:01:02",
             "association_time": 1587753456,
@@ -98,9 +86,9 @@ test_data = [
             "oui": "Apple",
             "powersave_enabled": False,
             "site_id": "5a32aa4ee4b0412345678910",
-            "sw_depth": -1,
-            "sw_mac": "fc:ec:da:11:22:33",
-            "sw_port": 1,
+            "switch_depth": -1,
+            "switch_mac": "fc:ec:da:11:22:33",
+            "switch_port": 1,
             "rx_bytes": 12867114,
             "rx_bytes_r": 326,
             "tx_bytes": 52852089,
@@ -117,7 +105,7 @@ test_data = [
         },
     ),
     (
-        WIRED_CLIENT,
+        [WIRED_CLIENT],
         {
             "access_point_mac": "",
             "association_time": 1642487042,
@@ -142,9 +130,9 @@ test_data = [
             "oui": "Manu",
             "powersave_enabled": None,
             "site_id": "5a32aa4ee4b0412345678910",
-            "sw_depth": 0,
-            "sw_mac": "fc:ec:da:11:22:33",
-            "sw_port": 3,
+            "switch_depth": 0,
+            "switch_mac": "fc:ec:da:11:22:33",
+            "switch_port": 3,
             "rx_bytes": 0,
             "rx_bytes_r": 0,
             "tx_bytes": 0,
@@ -163,49 +151,76 @@ test_data = [
 ]
 
 
-@pytest.mark.parametrize("raw_data, reference_data", test_data)
-async def test_clients(mock_aioresponse, unifi_controller, raw_data, reference_data):
+@pytest.mark.parametrize(("client_payload", "reference_data"), test_data)
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_clients(
+    unifi_controller: Controller, reference_data: dict[str, Any]
+) -> None:
     """Test clients class."""
-
-    clients = Clients([raw_data], unifi_controller.request)
-
+    clients = unifi_controller.clients
+    await clients.update()
     assert len(clients.items()) == 1
 
-    client = clients[raw_data["mac"]]
+    client = next(iter(clients.values()))
     for key, value in reference_data.items():
         assert getattr(client, key) == value
 
-    mock_aioresponse.post(
-        "https://host:8443/api/s/default/cmd/stamgr", payload={}, repeat=True
-    )
-    await clients.async_block(mac=client.mac)
-    assert verify_call(
-        mock_aioresponse,
-        "post",
-        "https://host:8443/api/s/default/cmd/stamgr",
-        json={"mac": client.mac, "cmd": "block-sta"},
-    )
 
-    await clients.async_unblock(mac=client.mac)
-    assert verify_call(
-        mock_aioresponse,
-        "post",
-        "https://host:8443/api/s/default/cmd/stamgr",
-        json={"mac": client.mac, "cmd": "unblock-sta"},
-    )
+@pytest.mark.parametrize(
+    ("method", "mac", "command"),
+    [
+        ("block", "0", {"mac": "0", "cmd": "block-sta"}),
+        ("unblock", "0", {"mac": "0", "cmd": "unblock-sta"}),
+        ("reconnect", "0", {"mac": "0", "cmd": "kick-sta"}),
+        ("remove_clients", ["0"], {"macs": ["0"], "cmd": "forget-sta"}),
+    ],
+)
+async def test_client_commands(
+    mock_aioresponse: aioresponses,
+    unifi_controller: Controller,
+    unifi_called_with: Callable[[str, str, dict[str, Any]], bool],
+    method: str,
+    mac: str | list[str],
+    command: dict[str, str | list[str]],
+) -> None:
+    """Test client commands."""
+    mock_aioresponse.post("https://host:8443/api/s/default/cmd/stamgr", payload={})
+    class_command = getattr(unifi_controller.clients, method)
+    await class_command(mac)
+    assert unifi_called_with("post", "/api/s/default/cmd/stamgr", json=command)
 
-    await clients.async_reconnect(mac=client.mac)
-    assert verify_call(
-        mock_aioresponse,
-        "post",
-        "https://host:8443/api/s/default/cmd/stamgr",
-        json={"mac": client.mac, "cmd": "kick-sta"},
-    )
 
-    await clients.remove_clients(macs=[client.mac])
-    assert verify_call(
-        mock_aioresponse,
-        "post",
-        "https://host:8443/api/s/default/cmd/stamgr",
-        json={"macs": [client.mac], "cmd": "forget-sta"},
+async def test_client_websocket(
+    unifi_controller: Controller, new_ws_data_fn: Callable[[dict[str, Any]], None]
+) -> None:
+    """Test controller managing clients."""
+    unsub = unifi_controller.clients.subscribe(mock_callback := Mock())
+    assert len(unifi_controller.clients._subscribers["*"]) == 1
+    assert mock_callback.call_count == 0
+
+    # Add client from websocket
+    new_ws_data_fn(
+        {
+            "meta": {"message": MessageKey.CLIENT.value},
+            "data": [WIRELESS_CLIENT],
+        }
     )
+    assert len(unifi_controller.clients.items()) == 1
+    assert mock_callback.call_count == 1
+
+    # Remove callback
+    unsub()
+    assert len(unifi_controller.clients._subscribers["*"]) == 0
+
+
+@pytest.mark.parametrize("client_payload", [[WIRELESS_CLIENT]])
+@pytest.mark.usefixtures("_mock_endpoints")
+async def test_message_client_removed(
+    unifi_controller: Controller, new_ws_data_fn: Callable[[dict[str, Any]], None]
+) -> None:
+    """Test controller communicating client has been removed."""
+    await unifi_controller.clients.update()
+    assert len(unifi_controller.clients.items()) == 1
+
+    new_ws_data_fn(MESSAGE_WIRELESS_CLIENT_REMOVED)
+    assert len(unifi_controller.clients.items()) == 0
